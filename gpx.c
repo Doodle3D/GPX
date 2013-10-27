@@ -243,6 +243,7 @@ int programState;           // gcode program state used to trigger start and end
 int reprapFlavor;           // reprap gcode flavor
 int dittoPrinting;          // enable ditto printing
 int buildProgress;          // override build percent
+int suppressEpilogue;				// do not emit build finished commands
 int verboseMode;
 unsigned lineNumber;        // the current line number in the gcode file
 static char buffer[BUFFER_MAX + 1];    // the statically allocated parse-in-place buffer
@@ -289,42 +290,42 @@ static void exit_handler(void)
 static void initialize_globals(void)
 {
     int i;
-    
+
     // we default to using pipes
     in = stdin;
     out = stdout;
     out2 = NULL;
     sdCardPath = NULL;
-    
+
     // register cleanup function
     atexit(exit_handler);
-    
+
     command.flag = 0;
-    
+
     // initialize current position to zero
-    
+
     currentPosition.x = 0.0;
     currentPosition.y = 0.0;
     currentPosition.z = 0.0;
-    
+
     currentPosition.a = 0.0;
     currentPosition.b = 0.0;
-    
+
     command.e = 0.0;
     command.f = 0.0;
     command.p = 0.0;
     command.r = 0.0;
     command.s = 0.0;
-    
+
     command.comment = "";
-    
+
     excess.a = 0.0;
     excess.b = 0.0;
-    
+
     currentFeedrate = get_home_feedrate(XYZ_BIT_MASK);
-    
+
     currentOffset = 0;
-    
+
     for(i = 0; i < 7; i++) {
         offset[i].x = 0.0;
         offset[i].y = 0.0;
@@ -334,10 +335,10 @@ static void initialize_globals(void)
     userOffset.x = 0.0;
     userOffset.y = 0.0;
     userOffset.z = 0.0;
-    
+
     selectedExtruder = 0;
     currentExtruder = 0;
-    
+
     for(i = 0; i < 2; i++) {
         tool[i].motor_enabled = 0;
 #if ENABLE_SIMULATED_RPM
@@ -345,7 +346,7 @@ static void initialize_globals(void)
 #endif
         tool[i].nozzle_temperature = 0;
         tool[i].build_platform_temperature = 0;
-        
+
         override[i].actual_filament_diameter = 0;
         override[i].filament_scale = 1.0;
         override[i].packing_density = 1.0;
@@ -361,11 +362,12 @@ static void initialize_globals(void)
 
     reprapFlavor = 1; // default is reprap flavor
     dittoPrinting = 0;
+    suppressEpilogue = 0;
     buildProgress = 0;
     verboseMode = 0;
-    
+
     lineNumber = 1;
-    
+
     filament[0].colour = "_null_";
     filament[0].diameter = 0.0;
     filament[0].temperature = 0;
@@ -376,7 +378,7 @@ static void initialize_globals(void)
     commandAtLength = 0;
     macrosEnabled = 0;
     pausePending = 0;
-    
+
     rewrite5D = 0;
     layer_height = 0.34;
 }
@@ -394,7 +396,7 @@ static void initialize_globals(void)
 static void write_8(unsigned char value)
 {
     if(fputc(value, out) == EOF) exit(1);
-    
+
     if(out2) {
         if(fputc(value, out2) == EOF) exit(1);
     }
@@ -407,10 +409,10 @@ static void write_16(unsigned short value)
         unsigned char b[2];
     } u;
     u.s = value;
-    
+
     if(fputc(u.b[0], out) == EOF) exit(1);
     if(fputc(u.b[1], out) == EOF) exit(1);
-    
+
     if(out2) {
         if(fputc(u.b[0], out2) == EOF) exit(1);
         if(fputc(u.b[1], out2) == EOF) exit(1);
@@ -424,12 +426,12 @@ static void write_32(unsigned int value)
         unsigned char b[4];
     } u;
     u.i = value;
-    
+
     if(fputc(u.b[0], out) == EOF) exit(1);
     if(fputc(u.b[1], out) == EOF) exit(1);
     if(fputc(u.b[2], out) == EOF) exit(1);
     if(fputc(u.b[3], out) == EOF) exit(1);
-    
+
     if(out2) {
         if(fputc(u.b[0], out2) == EOF) exit(1);
         if(fputc(u.b[1], out2) == EOF) exit(1);
@@ -445,12 +447,12 @@ static void write_float(float value)
         unsigned char b[4];
     } u;
     u.f = value;
-    
+
     if(fputc(u.b[0], out) == EOF) exit(1);
     if(fputc(u.b[1], out) == EOF) exit(1);
     if(fputc(u.b[2], out) == EOF) exit(1);
     if(fputc(u.b[3], out) == EOF) exit(1);
-    
+
     if(out2) {
         if(fputc(u.b[0], out2) == EOF) exit(1);
         if(fputc(u.b[1], out2) == EOF) exit(1);
@@ -463,7 +465,7 @@ static size_t write_string(char *string, long length)
 {
     size_t bytes_sent = fwrite(string, 1, length, out);
     if(fputc('\0', out) == EOF) exit(1);
-    
+
     if(out2) {
         bytes_sent = fwrite(string, 1, length, out2);
         if(fputc('\0', out2) == EOF) exit(1);
@@ -625,10 +627,10 @@ static int get_longest_dda()
     static int longestDDA = 0;
     if(longestDDA == 0) {
         longestDDA = (int)(60 * 1000000.0 / (machine.x.max_feedrate * machine.x.steps_per_mm));
-    
+
         int axisDDA = (int)(60 * 1000000.0 / (machine.y.max_feedrate * machine.y.steps_per_mm));
         if(longestDDA < axisDDA) longestDDA = axisDDA;
-    
+
         axisDDA = (int)(60 * 1000000.0 / (machine.z.max_feedrate * machine.z.steps_per_mm));
         if(longestDDA < axisDDA) longestDDA = axisDDA;
     }
@@ -654,7 +656,7 @@ static double get_home_feedrate(int flag) {
 // return the maximum safe feedrate
 
 static double get_safe_feedrate(int flag, Ptr5d delta) {
-    
+
     double feedrate = currentFeedrate;
     if(feedrate == 0.0) {
         feedrate = machine.x.max_feedrate;
@@ -686,7 +688,7 @@ static double get_safe_feedrate(int flag, Ptr5d delta) {
     if(distance == 0) {
         if(flag & A_IS_SET && feedrate > machine.a.max_feedrate) {
             feedrate = machine.a.max_feedrate;
-        }        
+        }
         if(flag & B_IS_SET && feedrate > machine.b.max_feedrate) {
             feedrate = machine.b.max_feedrate;
         }
@@ -719,7 +721,7 @@ static Point5d mm_to_steps(Ptr5d mm, Ptr2d excess)
         result.a = round(value);
         // changes to excess
         excess->a = value - result.a;
-        
+
         value = (mm->b * machine.b.steps_per_mm) + excess->b;
         result.b = round(value);
         // changes to excess
@@ -727,7 +729,7 @@ static Point5d mm_to_steps(Ptr5d mm, Ptr2d excess)
     }
     else {
         result.a = round(mm->a * machine.a.steps_per_mm);
-        result.b = round(mm->b * machine.b.steps_per_mm);        
+        result.b = round(mm->b * machine.b.steps_per_mm);
     }
     return result;
 }
@@ -781,22 +783,22 @@ static void home_axes(unsigned direction)
             fprintf(stderr, "(line %u) Semantic warning: Z axis homing to %s endstop" EOL, lineNumber, direction ? "maximum" : "minimum");
         }
     }
-    
+
     // unit vector distance in mm
     double distance = magnitude(xyz_flag, &unitVector);
     // move duration in microseconds = distance / feedrate * 60,000,000
     double microseconds = distance / feedrate * 60000000.0;
     // time between steps for longest axis = microseconds / longestStep
     unsigned step_delay = (unsigned)round(microseconds / longestAxis);
-    
+
     write_8(direction == ENDSTOP_IS_MIN ? 131 :132);
-    
+
     // uint8: Axes bitfield. Axes whose bits are set will be moved.
     write_8(xyz_flag);
-    
+
     // uint32: Feedrate, in microseconds between steps on the max delta. (DDA)
     write_32(step_delay);
-    
+
     // uint16: Timeout, in seconds.
     write_16(machine.timeout);
 }
@@ -806,7 +808,7 @@ static void home_axes(unsigned direction)
 static void delay(unsigned milliseconds)
 {
     write_8(133);
-    
+
     // uint32: delay, in milliseconds
     write_32(milliseconds);
 }
@@ -820,7 +822,7 @@ static void change_extruder_offset(unsigned extruder_id)
 {
     assert(extruder_id < machine.extruder_count);
     write_8(134);
-    
+
     // uint8: ID of the extruder to switch to
     write_8(extruder_id);
 }
@@ -831,17 +833,17 @@ static void wait_for_extruder(unsigned extruder_id, unsigned timeout)
 {
     assert(extruder_id < machine.extruder_count);
     write_8(135);
-    
+
     // uint8: ID of the extruder to wait for
     write_8(extruder_id);
-    
+
     // uint16: delay between query packets sent to the extruder, in ms (nominally 100 ms)
     write_16(100);
-    
+
     // uint16: Timeout before continuing without extruder ready, in seconds (nominally 1 minute)
     write_16(timeout);
 }
- 
+
 // 136 - extruder action command
 
 // Action 03 - Set extruder target temperature
@@ -850,16 +852,16 @@ static void set_nozzle_temperature(unsigned extruder_id, unsigned temperature)
 {
     assert(extruder_id < machine.extruder_count);
     write_8(136);
-    
+
     // uint8: ID of the extruder to query
     write_8(extruder_id);
-    
+
     // uint8: Action command to send to the extruder
     write_8(3);
-    
+
     // uint8: Length of the extruder command payload (N)
     write_8(2);
-    
+
     // int16: Desired target temperature, in Celsius
     write_16(temperature);
 }
@@ -870,16 +872,16 @@ static void set_fan(unsigned extruder_id, unsigned state)
 {
     assert(extruder_id < machine.extruder_count);
     write_8(136);
-    
+
     // uint8: ID of the extruder to query
     write_8(extruder_id);
-    
+
     // uint8: Action command to send to the extruder
     write_8(12);
-    
+
     // uint8: Length of the extruder command payload (N)
     write_8(1);
-    
+
     // uint8: 1 to enable, 0 to disable
     write_8(state);
 }
@@ -890,16 +892,16 @@ static void set_valve(unsigned extruder_id, unsigned state)
 {
     assert(extruder_id < machine.extruder_count);
     write_8(136);
-    
+
     // uint8: ID of the extruder to query
     write_8(extruder_id);
-    
+
     // uint8: Action command to send to the extruder
     write_8(13);
-    
+
     // uint8: Length of the extruder command payload (N)
     write_8(1);
-    
+
     // uint8: 1 to enable, 0 to disable
     write_8(state);
 }
@@ -910,16 +912,16 @@ static void set_build_platform_temperature(unsigned extruder_id, unsigned temper
 {
     assert(extruder_id < machine.extruder_count);
     write_8(136);
-    
+
     // uint8: ID of the extruder to query
     write_8(extruder_id);
-    
+
     // uint8: Action command to send to the extruder
     write_8(31);
-    
+
     // uint8: Length of the extruder command payload (N)
     write_8(2);
-    
+
     // int16: Desired target temperature, in Celsius
     write_16(temperature);
 }
@@ -933,35 +935,35 @@ static void set_steppers(unsigned axes, unsigned state)
         bitfield |= 0x80;
     }
     write_8(137);
-    
+
     // uint8: Bitfield codifying the command (see below)
     write_8(bitfield);
 }
- 
+
 // 139 - Queue absolute point
 
 static void queue_absolute_point()
 {
     long longestDDA = get_longest_dda();
     Point5d steps = mm_to_steps(&targetPosition, &excess);
-    
+
     write_8(139);
-    
+
     // int32: X coordinate, in steps
     write_32((int)steps.x);
-    
+
     // int32: Y coordinate, in steps
     write_32((int)steps.y);
-    
+
     // int32: Z coordinate, in steps
     write_32((int)steps.z);
-    
+
     // int32: A coordinate, in steps
     write_32(-(int)steps.a);
-    
+
     // int32: B coordinate, in steps
     write_32(-(int)steps.b);
-    
+
     // uint32: Feedrate, in microseconds between steps on the max delta. (DDA)
     write_32((int)longestDDA);
 }
@@ -972,19 +974,19 @@ static void set_position()
 {
     Point5d steps = mm_to_steps(&currentPosition, NULL);
     write_8(140);
-    
+
     // int32: X position, in steps
     write_32((int)steps.x);
-    
+
     // int32: Y position, in steps
     write_32((int)steps.y);
-    
+
     // int32: Z position, in steps
     write_32((int)steps.z);
-    
+
     // int32: A position, in steps
     write_32((int)steps.a);
-    
+
     // int32: B position, in steps
     write_32((int)steps.b);
 }
@@ -995,13 +997,13 @@ static void wait_for_build_platform(unsigned extruder_id, int timeout)
 {
     assert(extruder_id < machine.extruder_count);
     write_8(141);
-    
+
     // uint8: ID of the extruder platform to wait for
     write_8(extruder_id);
-    
+
     // uint16: delay between query packets sent to the extruder, in ms (nominally 100 ms)
     write_16(100);
-    
+
     // uint16: Timeout before continuing without extruder ready, in seconds (nominally 1 minute)
     write_16(timeout);
 }
@@ -1012,7 +1014,7 @@ static void wait_for_build_platform(unsigned extruder_id, int timeout)
 static void queue_new_point(unsigned milliseconds)
 {
     Point5d target;
-    
+
     // the function is only called by dwell, which is by definition stationary,
     // so set zero relitive position change
 
@@ -1034,7 +1036,7 @@ static void queue_new_point(unsigned milliseconds)
         target.a = -(numRevolutions * mmPerRevolution);
         command.flag |= A_IS_SET;
     }
-    
+
     if(tool[B].motor_enabled && tool[B].rpm) {
         double maxrpm = machine.b.max_feedrate * machine.b.steps_per_mm / machine.b.motor_steps;
         double rpm = tool[B].rpm > maxrpm ? maxrpm : tool[B].rpm;
@@ -1050,25 +1052,25 @@ static void queue_new_point(unsigned milliseconds)
     Point5d steps = mm_to_steps(&target, &excess);
 
     write_8(142);
-    
+
     // int32: X coordinate, in steps
     write_32((int)steps.x);
-    
+
     // int32: Y coordinate, in steps
     write_32((int)steps.y);
-    
+
     // int32: Z coordinate, in steps
     write_32((int)steps.z);
-    
+
     // int32: A coordinate, in steps
     write_32((int)steps.a);
-    
+
     // int32: B coordinate, in steps
     write_32((int)steps.b);
-    
+
     // uint32: Duration of the movement, in microseconds
     write_32(milliseconds * 1000);
-    
+
     // uint8: Axes bitfield to specify which axes are relative. Any axis with a bit set should make a relative movement.
     write_8(AXES_BIT_MASK);
 }
@@ -1079,7 +1081,7 @@ static void queue_new_point(unsigned milliseconds)
 static void store_home_positions(void)
 {
     write_8(143);
-    
+
     // uint8: Axes bitfield to specify which axes' positions to store.
     // Any axis with a bit set should have its position stored.
     write_8(command.flag & AXES_BIT_MASK);
@@ -1090,7 +1092,7 @@ static void store_home_positions(void)
 static void recall_home_positions(void)
 {
     write_8(144);
-    
+
     // uint8: Axes bitfield to specify which axes' positions to recall.
     // Any axis with a bit set should have its position recalled.
     write_8(command.flag & AXES_BIT_MASK);
@@ -1103,32 +1105,32 @@ static void set_pot_value(unsigned axis, unsigned value)
     assert(axis <= 4);
     assert(value <= 127);
     write_8(145);
-    
+
     // uint8: axis value (valid range 0-4) which axis pot to set
     write_8(axis);
-    
+
     // uint8: value (valid range 0-127), values over max will be capped at max
     write_8(value);
 }
- 
+
 // 146 - Set RGB LED value
 
 static void set_LED(unsigned red, unsigned green, unsigned blue, unsigned blink)
 {
     write_8(146);
-    
+
     // uint8: red value (all pix are 0-255)
     write_8(red);
-    
+
     // uint8: green
     write_8(green);
-    
+
     // uint8: blue
     write_8(blue);
-    
+
     // uint8: blink rate (0-255 valid)
     write_8(blink);
-    
+
     // uint8: 0 (reserved for future use)
     write_8(0);
 }
@@ -1136,19 +1138,19 @@ static void set_LED(unsigned red, unsigned green, unsigned blue, unsigned blink)
 static void set_LED_RGB(unsigned rgb, unsigned blink)
 {
     write_8(146);
-    
+
     // uint8: red value (all pix are 0-255)
     write_8((rgb >> 16) & 0xFF);
-    
+
     // uint8: green
     write_8((rgb >> 8) & 0xFF);
-    
+
     // uint8: blue
     write_8(rgb & 0xFF);
-    
+
     // uint8: blink rate (0-255 valid)
     write_8(blink);
-    
+
     // uint8: 0 (reserved for future use)
     write_8(0);
 
@@ -1159,7 +1161,7 @@ static void set_LED_RGB(unsigned rgb, unsigned blink)
 static void set_beep(unsigned frequency, unsigned milliseconds)
 {
     write_8(147);
-    
+
     // uint16: frequency
     write_16(frequency);
 
@@ -1178,13 +1180,13 @@ static void display_message(char *message, unsigned vPos, unsigned hPos, unsigne
 {
     assert(vPos < 4);
     assert(hPos < 20);
-    
+
     long bytesSent = 0;
     unsigned bitfield = 0;
     unsigned seconds = 0;
-    
+
     unsigned maxLength = hPos ? 20 - hPos : 20;
-    
+
     // clip string so it fits in 4 x 20 lcd display buffer
     long length = strlen(message);
     if(vPos || hPos) {
@@ -1193,7 +1195,7 @@ static void display_message(char *message, unsigned vPos, unsigned hPos, unsigne
     else {
         if(length > 80) length = 80;
     }
-    
+
     while(bytesSent < length) {
         if(bytesSent + maxLength >= length) {
             seconds = timeout;
@@ -1205,9 +1207,9 @@ static void display_message(char *message, unsigned vPos, unsigned hPos, unsigne
         if(bytesSent > 0) {
             bitfield |= 0x01; //do not clear flag
         }
-        
+
         write_8(149);
-        
+
         // uint8: Options bitfield (see below)
         write_8(bitfield);
         // uint8: Horizontal position to display the message at (commonly 0-19)
@@ -1227,12 +1229,12 @@ static void display_message(char *message, unsigned vPos, unsigned hPos, unsigne
 static void set_build_progress(unsigned percent)
 {
     if(percent > 100) percent = 100;
-    
+
     write_8(150);
-    
+
     // uint8: percent (0-100)
     write_8(percent);
-    
+
     // uint8: 0 (reserved for future use) (reserved for future use)
     write_8(0);
 }
@@ -1244,10 +1246,10 @@ static void queue_song(unsigned song_id)
     // song ID 0: error tone with 4 cycles
     // song ID 1: done tone
     // song ID 2: error tone with 2 cycles
-    
+
     assert(song_id <= 2);
     write_8(151);
-    
+
     // uint8: songID: select from a predefined list of songs
     write_8(song_id);
 }
@@ -1259,7 +1261,7 @@ static void queue_song(unsigned song_id)
 static void start_build(char * filename)
 {
     write_8(153);
-    
+
     // uint32: 0 (reserved for future use)
     write_32(0);
 
@@ -1276,7 +1278,7 @@ static void end_build()
     // uint8: 0 (reserved for future use)
     write_8(0);
 }
- 
+
 // 155 - Queue extended point x3g
 
 // IMPORTANT: this command updates the parser state
@@ -1292,7 +1294,7 @@ static void queue_ext_point(double feedrate)
         queue_absolute_point();
         return;
     }
-    
+
     // compute the relative distance traveled along each axis and convert to steps
     if(command.flag & X_IS_SET) {
         deltaMM.x = targetPosition.x - currentPosition.x;
@@ -1302,7 +1304,7 @@ static void queue_ext_point(double feedrate)
         deltaMM.x = 0;
         deltaSteps.x = 0;
     }
-    
+
     if(command.flag & Y_IS_SET) {
         deltaMM.y = targetPosition.y - currentPosition.y;
         deltaSteps.y = round(fabs(deltaMM.y) * machine.y.steps_per_mm);
@@ -1311,7 +1313,7 @@ static void queue_ext_point(double feedrate)
         deltaMM.y = 0;
         deltaSteps.y = 0;
     }
-    
+
     if(command.flag & Z_IS_SET) {
         deltaMM.z = targetPosition.z - currentPosition.z;
         deltaSteps.z = round(fabs(deltaMM.z) * machine.z.steps_per_mm);
@@ -1320,7 +1322,7 @@ static void queue_ext_point(double feedrate)
         deltaMM.z = 0;
         deltaSteps.z = 0;
     }
-    
+
     if(command.flag & A_IS_SET) {
         deltaMM.a = targetPosition.a - currentPosition.a;
         deltaSteps.a = round(fabs(deltaMM.a) * machine.a.steps_per_mm);
@@ -1329,7 +1331,7 @@ static void queue_ext_point(double feedrate)
         deltaMM.a = 0;
         deltaSteps.a = 0;
     }
-    
+
     if(command.flag & B_IS_SET) {
         deltaMM.b = targetPosition.b - currentPosition.b;
         deltaSteps.b = round(fabs(deltaMM.b) * machine.b.steps_per_mm);
@@ -1338,7 +1340,7 @@ static void queue_ext_point(double feedrate)
         deltaMM.b = 0;
         deltaSteps.b = 0;
     }
-    
+
     // check that we have actually moved on at least one axis when the move is
     // rounded down to the nearest step
     if(magnitude(command.flag, &deltaSteps) > 0) {
@@ -1386,19 +1388,19 @@ static void queue_ext_point(double feedrate)
             }
         }
         Point5d target = targetPosition;
-        
+
         target.a = -deltaMM.a;
         target.b = -deltaMM.b;
-        
+
         deltaMM.x = fabs(deltaMM.x);
         deltaMM.y = fabs(deltaMM.y);
         deltaMM.z = fabs(deltaMM.z);
         deltaMM.a = fabs(deltaMM.a);
         deltaMM.b = fabs(deltaMM.b);
-        
+
         double feedrate = get_safe_feedrate(command.flag, &deltaMM);
         double minutes = distance / feedrate;
-        
+
         if(minutes == 0) {
             distance = 0;
             if(command.flag & A_IS_SET) {
@@ -1409,7 +1411,7 @@ static void queue_ext_point(double feedrate)
             }
             minutes = distance / feedrate;
         }
-        
+
         //convert feedrate to mm/sec
         feedrate /= 60.0;
 
@@ -1448,42 +1450,42 @@ static void queue_ext_point(double feedrate)
             tool[B].rpm = 0;
         }
 #endif
-        
+
         Point5d steps = mm_to_steps(&target, &excess);
-        
+
         double usec = (60000000.0 * minutes);
-        
+
         double dda_interval = usec / largest_axis(command.flag, &deltaSteps);
-        
+
         // Convert dda_interval into dda_rate (dda steps per second on the longest axis)
         double dda_rate = 1000000.0 / dda_interval;
 
         write_8(155);
-        
+
         // int32: X coordinate, in steps
         write_32((int)steps.x);
-        
+
         // int32: Y coordinate, in steps
         write_32((int)steps.y);
-        
+
         // int32: Z coordinate, in steps
         write_32((int)steps.z);
-        
+
         // int32: A coordinate, in steps
         write_32((int)steps.a);
-        
+
         // int32: B coordinate, in steps
         write_32((int)steps.b);
 
         // uint32: DDA Feedrate, in steps/s
         write_32((unsigned)dda_rate);
-        
+
         // uint8: Axes bitfield to specify which axes are relative. Any axis with a bit set should make a relative movement.
         write_8(A_IS_SET|B_IS_SET);
 
         // float (single precision, 32 bit): mm distance for this move.  normal of XYZ if any of these axes are active, and AB for extruder only moves
         write_float((float)distance);
-        
+
         // uint16: feedrate in mm/s, multiplied by 64 to assist fixed point calculation on the bot
         write_16((unsigned)(feedrate * 64.0));
 	}
@@ -1494,7 +1496,7 @@ static void queue_ext_point(double feedrate)
 static void set_acceleration(int state)
 {
     write_8(156);
-    
+
     // uint8: 1 to enable, 0 to disable
     write_8(state);
 }
@@ -1506,7 +1508,7 @@ static void set_acceleration(int state)
 static void pause_at_zpos(float z_positon)
 {
     write_8(158);
-    
+
     // uint8: pause at Z coordinate or 0.0 to disable
     write_float(z_positon);
 }
@@ -1518,7 +1520,7 @@ static void pause_at_zpos(float z_positon)
 static int calculate_target_position(void)
 {
     int do_pause_at_zpos = 0;
-    
+
     Point3d conditionalOffset = offset[currentOffset];
 
     if(macrosEnabled) {
@@ -1526,9 +1528,9 @@ static int calculate_target_position(void)
         conditionalOffset.y += userOffset.y;
         conditionalOffset.z += userOffset.z;
     }
-    
+
     // CALCULATE TARGET POSITION
-    
+
     // x
     if(command.flag & X_IS_SET) {
         targetPosition.x = isRelative ? (currentPosition.x + command.x) : (command.x + conditionalOffset.x);
@@ -1536,7 +1538,7 @@ static int calculate_target_position(void)
     else {
         targetPosition.x = currentPosition.x;
     }
-    
+
     // y
     if(command.flag & Y_IS_SET) {
         targetPosition.y = isRelative ? (currentPosition.y + command.y) : (command.y + conditionalOffset.y);
@@ -1544,7 +1546,7 @@ static int calculate_target_position(void)
     else {
         targetPosition.y = currentPosition.y;
     }
-    
+
     // z
     if(command.flag & Z_IS_SET) {
         targetPosition.z = isRelative ? (currentPosition.z + command.z) : (command.z + conditionalOffset.z);
@@ -1570,14 +1572,14 @@ static int calculate_target_position(void)
     else {
         targetPosition.b = currentPosition.b;
     }
-    
+
     // update current feedrate
     if(command.flag & F_IS_SET) {
         currentFeedrate = command.f;
     }
-    
+
     // DITTO PRINTING
-    
+
     if(dittoPrinting) {
         if(command.flag & A_IS_SET) {
             targetPosition.b = targetPosition.a;
@@ -1588,9 +1590,9 @@ static int calculate_target_position(void)
             command.flag |= A_IS_SET;
         }
     }
-    
+
     // CHECK FOR COMMAND @ Z POS
-    
+
     // check if there are more commands on the stack
     if(macrosEnabled && commandAtIndex < commandAtLength) {
         // check if the next command will cross the z threshold
@@ -1750,7 +1752,7 @@ static char *normalize_word(char* p)
             else {
                 break;
             }
-        }        
+        }
     }
     *e = 0;
     return s;
@@ -1770,7 +1772,7 @@ static char *normalize_comment(char *p) {
 // MACRO PARSER
 
 /* format
- 
+
  ;@<STRING> <STRING> <FLOAT> <FLOAT>mm <INTEGER>c #<HEX> (<STRING>)
 
  MACRO:= ';' '@' COMMAND COMMENT EOL
@@ -1878,7 +1880,7 @@ static void parse_macro(const char* macro, char *p)
             if(machine.a.has_heated_build_platform) override[A].build_platform_temperature = temperature;
             else if(machine.b.has_heated_build_platform) override[B].build_platform_temperature = temperature;
             else {
-                fprintf(stderr, "(line %u) Semantic warning: @printer macro cannot override non-existant heated build platform" EOL, lineNumber);                
+                fprintf(stderr, "(line %u) Semantic warning: @printer macro cannot override non-existant heated build platform" EOL, lineNumber);
             }
         }
         if(LED) set_LED_RGB(LED, 0);
@@ -1948,7 +1950,7 @@ static void parse_macro(const char* macro, char *p)
             add_command_at(z, name, 0);
         }
         else {
-            fprintf(stderr, "(line %u) Semantic error: @pause macro with missing zPos" EOL, lineNumber);            
+            fprintf(stderr, "(line %u) Semantic error: @pause macro with missing zPos" EOL, lineNumber);
         }
     }
     // ;@temp <ZPOS> <TEMP>c
@@ -2158,7 +2160,7 @@ static int config_handler(unsigned lineno, const char* section, const char* prop
         return 0;
     }
     return 1;
-    
+
 SECTION_ERROR:
     fprintf(stderr, "(line %u) Configuration error: [%s] section contains unrecognised property %s=..." EOL, lineno, section, property);
     return 0;
@@ -2174,20 +2176,21 @@ static void usage()
     fputs("it under the terms of the GNU General Public License as published by" EOL, stderr);
     fputs("the Free Software Foundation; either version 2 of the License, or" EOL, stderr);
     fputs("(at your option) any later version." EOL, stderr);
-    
+
     fputs(EOL "This program is distributed in the hope that it will be useful," EOL, stderr);
     fputs("but WITHOUT ANY WARRANTY; without even the implied warranty of" EOL, stderr);
     fputs("MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the" EOL, stderr);
     fputs("GNU General Public License for more details." EOL, stderr);
-    
+
     fputs(EOL "Usage: gpx [-dgprsvw] [-f F] [-x X] [-y Y] [-z Z] [-m M] [-c C] IN [OUT]" EOL, stderr);
     fputs(EOL "Options:" EOL EOL, stderr);
     fputs("\t-d\tsimulated ditto printing" EOL, stderr);
+    fputs("\t-n\tsuppress epilogue commands" EOL, stderr);
     fputs("\t-g\tMakerbot/ReplicatorG GCODE flavor" EOL, stderr);
     fputs("\t-p\toverride build percentage" EOL, stderr);
     fputs("\t-r\tReprap GCODE flavor" EOL, stderr);
     fputs("\t-s\tenable stdin and stdout support for command pipes" EOL, stderr);
-    fputs("\t-v\tverose mode" EOL, stderr);
+    fputs("\t-v\tverbose mode" EOL, stderr);
     fputs("\t-w\trewrite 5d extrusion values" EOL, stderr);
     fputs(EOL "F is the actual filament diameter" EOL, stderr);
     fputs(EOL "X,Y & Z are the coordinate system offsets for the conversion" EOL EOL, stderr);
@@ -2235,9 +2238,9 @@ int main(int argc, char * argv[])
     int overflow = 0;
 
     initialize_globals();
-    
+
     // READ GPX.INI
-    
+
     // if present, read the gpx.ini file from the program directory
     {
         char *appname = argv[0];
@@ -2271,15 +2274,18 @@ int main(int argc, char * argv[])
     }
 
     // READ COMMAND LINE
-    
+
     // get the command line options
-    while ((c = getopt(argc, argv, "c:dgf:m:prsvwx:y:z:")) != -1) {
+    while ((c = getopt(argc, argv, "c:dngf:m:prsvwx:y:z:")) != -1) {
         switch (c) {
             case 'c':
                 config = optarg;
                 break;
             case 'd':
                 dittoPrinting = 1;
+                break;
+            case 'n':
+                suppressEpilogue = 1;
                 break;
             case 'g':
                 reprapFlavor = 0;
@@ -2333,9 +2339,9 @@ int main(int argc, char * argv[])
                 usage();
         }
     }
-    
+
     // READ CONFIGURATION
-    
+
     if(config) {
         i = ini_parse(config, config_handler);
         if(i == 0) {
@@ -2350,12 +2356,12 @@ int main(int argc, char * argv[])
             usage();
         }
     }
-    
+
     argc -= optind;
     argv += optind;
-    
+
     // OPEN FILES FOR INPUT AND OUTPUT
-    
+
     // open the input filename if one is provided
     if(argc > 0) {
         char *filename = argv[0];
@@ -2424,7 +2430,7 @@ int main(int argc, char * argv[])
                 sd_filename[sl++] = PATH_DELIM;
                 long l = strlen(filename);
                 memcpy(sd_filename + sl, filename, l);
-                sd_filename[sl + l] = 0;                
+                sd_filename[sl + l] = 0;
             }
             out2 = fopen(sd_filename, "wb");
             if(out2) {
@@ -2435,31 +2441,31 @@ int main(int argc, char * argv[])
     else if(!standard_io) {
         usage();
     }
-    
+
     if(dittoPrinting && machine.extruder_count == 1) {
         fputs("Configuration error: ditto printing cannot access non-existant second extruder" EOL, stderr);
         dittoPrinting = 0;
     }
-    
+
     if(filament_diameter > 0.0001) {
         override[A].actual_filament_diameter = filament_diameter;
         override[B].actual_filament_diameter = filament_diameter;
     }
-    
+
     // CALCULATE FILAMENT SCALING
-    
+
     if(override[A].actual_filament_diameter > 0.0001
        && override[A].actual_filament_diameter != machine.nominal_filament_diameter) {
         set_filament_scale(A, override[A].actual_filament_diameter);
     }
-    
+
     if(override[B].actual_filament_diameter > 0.0001
        && override[B].actual_filament_diameter != machine.nominal_filament_diameter) {
         set_filament_scale(B, override[B].actual_filament_diameter);
     }
 
     // READ INPUT AND CONVERT TO OUTPUT
-    
+
     // at this point we have read the command line, set the machine definition
     // and both the input and output files are open, so its time to parse the
     // gcode input and convert it to x3g output
@@ -2502,7 +2508,7 @@ int main(int argc, char * argv[])
                 digits = p;
                 p = normalize_word(p);
                 switch(c) {
-                        
+
                     // PARAMETERS
 
                         // Xnnn	 X coordinate, usually to move to
@@ -2511,14 +2517,14 @@ int main(int argc, char * argv[])
                         command.x = strtod(digits, NULL);
                         command.flag |= X_IS_SET;
                         break;
-                        
+
                         // Ynnn	 Y coordinate, usually to move to
                     case 'y':
                     case 'Y':
                         command.y = strtod(digits, NULL);
                         command.flag |= Y_IS_SET;
                         break;
-                        
+
                         // Znnn	 Z coordinate, usually to move to
                     case 'z':
                     case 'Z':
@@ -2539,42 +2545,42 @@ int main(int argc, char * argv[])
                         command.b = strtod(digits, NULL);
                         command.flag |= B_IS_SET;
                         break;
-                                                
+
                         // Ennn	 Length of extrudate in mm.
                     case 'e':
                     case 'E':
                         command.e = strtod(digits, NULL);
                         command.flag |= E_IS_SET;
                         break;
-                        
+
                         // Fnnn	 Feedrate in mm per minute.
                     case 'f':
                     case 'F':
                         command.f = strtod(digits, NULL);
                         command.flag |= F_IS_SET;
                         break;
-                                                
+
                         // Pnnn	 Command parameter, such as a time in milliseconds
                     case 'p':
                     case 'P':
                         command.p = strtod(digits, NULL);
                         command.flag |= P_IS_SET;
                         break;
-                        
+
                         // Rnnn	 Command Parameter, such as RPM
                     case 'r':
                     case 'R':
                         command.r = strtod(digits, NULL);
                         command.flag |= R_IS_SET;
                         break;
-                        
+
                         // Snnn	 Command parameter, such as temperature
                     case 's':
                     case 'S':
                         command.s = strtod(digits, NULL);
                         command.flag |= S_IS_SET;
                         break;
-                        
+
                     // COMMANDS
 
                         // Gnnn GCode command, such as move to a point
@@ -2595,7 +2601,7 @@ int main(int argc, char * argv[])
                         command.t = atoi(digits);
                         command.flag |= T_IS_SET;
                         break;
-                    
+
                     default:
                         fprintf(stderr, "(line %u) Syntax warning: unrecognised command word '%c'" EOL, lineNumber, c);
                 }
@@ -2685,7 +2691,7 @@ int main(int argc, char * argv[])
         }
 
         // we treat E as short hand for A or B being set, depending on the state of the currentExtruder
-        
+
         if(command.flag & E_IS_SET) {
             if(currentExtruder == 0) {
                 // a = e
@@ -2698,9 +2704,9 @@ int main(int argc, char * argv[])
                 command.b = command.e;
             }
         }
-        
+
         // INTERPRET COMMAND
-        
+
         if(command.flag & G_IS_SET) {
             switch(command.g) {
                     // G0 - Rapid Positioning
@@ -2742,7 +2748,7 @@ int main(int argc, char * argv[])
                         command_emitted++;
                     }
                     break;
-                    
+
                     // G1 - Coordinated Motion
                 case 1:
                     do_pause_at_zpos = calculate_target_position();
@@ -2750,10 +2756,10 @@ int main(int argc, char * argv[])
                     update_target_position();
                     command_emitted++;
                     break;
-                    
+
                     // G2 - Clockwise Arc
                     // G3 - Counter Clockwise Arc
-                    
+
                     // G4 - Dwell
                 case 4:
                     if(command.flag & P_IS_SET) {
@@ -2814,13 +2820,13 @@ int main(int argc, char * argv[])
                         fprintf(stderr, "(line %u) Syntax error: G10 is missing coordiante system, use Pn where n is 1-6" EOL, lineNumber);
                     }
                     break;
-                
+
                     // G21 - Use Milimeters as Units (IGNORED)
                     // G71 - Use Milimeters as Units (IGNORED)
                 case 21:
                 case 71:
                     break;
-                    
+
                     // G53 - Set absolute coordinate system
                 case 53:
                     currentOffset = 0;
@@ -2835,27 +2841,27 @@ int main(int argc, char * argv[])
                 case 55:
                     currentOffset = 2;
                     break;
-                    
+
                     // G56 - Use coordinate system from G10 P3
                 case 56:
                     currentOffset = 3;
                     break;
-                    
+
                     // G57 - Use coordinate system from G10 P4
                 case 57:
                     currentOffset = 4;
                     break;
-                    
+
                     // G58 - Use coordinate system from G10 P5
                 case 58:
                     currentOffset = 5;
                     break;
-                    
+
                     // G59 - Use coordinate system from G10 P6
                 case 59:
                     currentOffset = 6;
                     break;
-                    
+
                     // G90 - Absolute Positioning
                 case 90:
                     isRelative = 0;
@@ -2886,7 +2892,7 @@ int main(int argc, char * argv[])
                     if((command.flag & mask) == mask) positionKnown = 1;
                     break;
                 }
-                    
+
                     // G130 - Set given axes potentiometer Value
                 case 130:
                     if(command.flag & X_IS_SET) set_pot_value(0, command.x < 0 ? 0 : command.x > 127 ? 127 : (unsigned)command.x);
@@ -2895,7 +2901,7 @@ int main(int argc, char * argv[])
                     if(command.flag & A_IS_SET) set_pot_value(3, command.a < 0 ? 0 : command.a > 127 ? 127 : (unsigned)command.a);
                     if(command.flag & B_IS_SET) set_pot_value(4, command.b < 0 ? 0 : command.b > 127 ? 127 : (unsigned)command.b);
                     break;
-                    
+
                     // G161 - Home given axes to minimum
                 case 161:
                     if(command.flag & F_IS_SET) currentFeedrate = command.f;
@@ -2921,17 +2927,19 @@ int main(int argc, char * argv[])
             }
         }
         else if(command.flag & M_IS_SET) {
-            switch(command.m) {                    
+            switch(command.m) {
                     // M2 - End program
                 case 2:
-                    if(program_is_running()) {
-                        end_program();
-                        set_build_progress(100);
-                        end_build();
-                        set_steppers(AXES_BIT_MASK, 0);
-                    }
+                		if (!suppressEpilogue) {
+											if(program_is_running()) {
+													end_program();
+													set_build_progress(100);
+													end_build();
+													set_steppers(AXES_BIT_MASK, 0);
+											}
+                		}
                     exit(0);
-                    
+
                     // M6 - Tool change AND wait for extruder AND build platfrom to reach (or exceed) temperature
                 case 6:
                     if(!dittoPrinting && selectedExtruder != currentExtruder) {
@@ -2987,7 +2995,7 @@ int main(int argc, char * argv[])
                         if(machine.extruder_count == 2) tool[B].motor_enabled = 1;
                     }
                     break;
-                    
+
                     // M18 - Disable axes steppers
                 case 18:
                     if(command.flag & AXES_BIT_MASK) {
@@ -3003,7 +3011,7 @@ int main(int argc, char * argv[])
                         if(machine.extruder_count == 2) tool[B].motor_enabled = 0;
                     }
                     break;
-                    
+
                     // M70 - Display message on LCD
                 case 70:
                     if(command.flag & COMMENT_IS_SET) {
@@ -3020,7 +3028,7 @@ int main(int argc, char * argv[])
                         command_emitted++;
                     }
                     else {
-                        fprintf(stderr, "(line %u) Syntax error: M70 is missing message text, use (text) where text is message" EOL, lineNumber);                        
+                        fprintf(stderr, "(line %u) Syntax error: M70 is missing message text, use (text) where text is message" EOL, lineNumber);
                     }
                     break;
 
@@ -3049,7 +3057,7 @@ int main(int argc, char * argv[])
                     command_emitted++;
                     break;
                 }
-                    
+
                     // M72 - Queue a song or play a tone
                 case 72:
                     if(command.flag & P_IS_SET) {
@@ -3062,7 +3070,7 @@ int main(int argc, char * argv[])
                         fprintf(stderr, "(line %u) Syntax warning: M72 is missing song number, use Pn where n is 0-2" EOL, lineNumber);
                     }
                     break;
-                    
+
                     // M73 - Manual set build percentage
                 case 73:
                     if(command.flag & P_IS_SET) {
@@ -3102,17 +3110,17 @@ int main(int argc, char * argv[])
                         fprintf(stderr, "(line %u) Syntax warning: M73 is missing build percentage, use Pn where n is 0-100" EOL, lineNumber);
                     }
                     break;
-                    
+
                     // M82 - set extruder to absolute mode
                 case 82:
                     extruderIsRelative = 0;
                     break;
-                    
+
                     // M83 - set extruder to relative mode
                 case 83:
                     extruderIsRelative = 1;
                     break;
-                    
+
                     // M84 - Stop idle hold
                 case 84:
                     set_steppers(machine.extruder_count == 1 ? (XYZ_BIT_MASK | A_IS_SET) : AXES_BIT_MASK, 0);
@@ -3120,7 +3128,7 @@ int main(int argc, char * argv[])
                     tool[A].motor_enabled = 0;
                     if(machine.extruder_count == 2) tool[B].motor_enabled = 0;
                     break;
-                    
+
                     // M101 - Turn extruder on, forward
                     // M102 - Turn extruder on, reverse
                 case 101:
@@ -3136,7 +3144,7 @@ int main(int argc, char * argv[])
                         tool[selectedExtruder].motor_enabled = command.m == 101 ? 1 : -1;
                     }
                     break;
-                    
+
                     // M103 - Turn extruder off
                 case 103:
                     if(dittoPrinting) {
@@ -3150,7 +3158,7 @@ int main(int argc, char * argv[])
                         tool[selectedExtruder].motor_enabled = 0;
                     }
                     break;
-                    
+
                     // M104 - Set extruder temperature
                 case 104:
                     if(command.flag & S_IS_SET) {
@@ -3178,7 +3186,7 @@ int main(int argc, char * argv[])
                         fprintf(stderr, "(line %u) Syntax error: M104 is missing temperature, use Sn where n is 0-280" EOL, lineNumber);
                     }
                     break;
-                    
+
                     // M106 - Turn cooling fan on
                 case 106: {
                     int state = (command.flag & S_IS_SET) ? ((unsigned)command.s ? 1 : 0) : 1;
@@ -3206,7 +3214,7 @@ int main(int argc, char * argv[])
                     }
                     break;
                 }
-                    
+
                     // M107 - Turn cooling fan off
                 case 107:
                     if(reprapFlavor) {
@@ -3232,7 +3240,7 @@ int main(int argc, char * argv[])
                         }
                     }
                     break;
-                    
+
                     // M108 - set extruder motor 5D 'simulated' RPM
                 case 108:
 #if ENABLE_SIMULATED_RPM
@@ -3249,8 +3257,8 @@ int main(int argc, char * argv[])
                     }
 #endif
                     break;
-                    
-                    
+
+
                     // M109 - Set Extruder Temperature and Wait
                 case 109:
                     if(reprapFlavor) {
@@ -3302,7 +3310,7 @@ int main(int argc, char * argv[])
                         break;
                     }
                     // fall through to M140 for Makerbot/ReplicatorG flavor
-                    
+
                     // M140 - Set Build Platform Temperature
                 case 140:
                     if(machine.a.has_heated_build_platform || machine.b.has_heated_build_platform) {
@@ -3361,7 +3369,7 @@ int main(int argc, char * argv[])
                         command_emitted++;
                     }
                     break;
-                    
+
                     // M131 - Store Current Position to EEPROM
                 case 131:
                     if(command.flag & AXES_BIT_MASK) {
@@ -3372,7 +3380,7 @@ int main(int argc, char * argv[])
                         fprintf(stderr, "(line %u) Syntax error: M131 is missing axes, use X Y Z A B" EOL, lineNumber);
                     }
                     break;
-                    
+
                     // M132 - Load Current Position from EEPROM
                 case 132:
                     if(command.flag & AXES_BIT_MASK) {
@@ -3386,7 +3394,7 @@ int main(int argc, char * argv[])
                         fprintf(stderr, "(line %u) Syntax error: M132 is missing axes, use X Y Z A B" EOL, lineNumber);
                     }
                     break;
-                    
+
                     // M133 - Wait for extruder
                 case 133: {
                     int timeout = command.flag & P_IS_SET ? (int)command.p : 0xFFFF;
@@ -3409,7 +3417,7 @@ int main(int argc, char * argv[])
                     }
                     break;
                 }
-                    
+
                     // M134
                     // M190 - Wait for build platform to reach (or exceed) temperature
                 case 134:
@@ -3434,7 +3442,7 @@ int main(int argc, char * argv[])
                     }
                     break;
                 }
-                    
+
                     // M135 - Change tool
                 case 135:
                     if(!dittoPrinting && selectedExtruder != currentExtruder) {
@@ -3443,7 +3451,7 @@ int main(int argc, char * argv[])
                         command_emitted++;
                     }
                     break;
-                    
+
                     // M136 - Build start notification
                 case 136:
                     if(program_is_ready()) {
@@ -3453,7 +3461,7 @@ int main(int argc, char * argv[])
                         change_extruder_offset(currentExtruder);
                     }
                     break;
-                    
+
                     // M137 - Build end notification
                 case 137:
                     if(program_is_running()) {
@@ -3472,19 +3480,19 @@ int main(int argc, char * argv[])
                     command_emitted++;
                     break;
                 }
-                    
+
                     // M320 - Acceleration on for subsequent instructions
                 case 320:
                     set_acceleration(1);
                     command_emitted++;
                     break;
-                    
+
                     // M321 - Acceleration off for subsequent instructions
                 case 321:
                     set_acceleration(0);
                     command_emitted++;
                     break;
-                    
+
                     // M322 - Pause @ zPos
                 case 322:
                     if(command.flag & Z_IS_SET) {
@@ -3493,7 +3501,7 @@ int main(int argc, char * argv[])
                         if(macrosEnabled) {
                             conditional_z += userOffset.z;
                         }
-                        
+
                         double z = isRelative ? (currentPosition.z + command.z) : (command.z + conditional_z);
                         pause_at_zpos(z);
                     }
@@ -3502,7 +3510,7 @@ int main(int argc, char * argv[])
                     }
                     command_emitted++;
                     break;
-                    
+
                     // M420 - Set RGB LED value (REB - P)
                 case 420: {
                     unsigned red = 0;
@@ -3517,7 +3525,7 @@ int main(int argc, char * argv[])
                     command_emitted++;
                     break;
                 }
-                    
+
                 default:
                     fprintf(stderr, "(line %u) Syntax warning: unsupported mcode command 'M%u'" EOL, lineNumber, command.m);
             }
@@ -3562,14 +3570,16 @@ int main(int argc, char * argv[])
         }
         lineNumber = next_line;
     }
-    
-    if(program_is_running()) {
-        end_program();
-        set_build_progress(100);
-        end_build();
+
+    if (!suppressEpilogue) {
+			if(program_is_running()) {
+					end_program();
+					set_build_progress(100);
+					end_build();
+			}
+			set_steppers(AXES_BIT_MASK, 0);
     }
-    set_steppers(AXES_BIT_MASK, 0);
-    
+
     exit(0);
 }
 
