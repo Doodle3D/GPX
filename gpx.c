@@ -484,6 +484,12 @@ static void write_16(unsigned short value)
     } u;
     u.s = value;
 
+#ifndef __LITTLE_ENDIAN__
+    unsigned char s;
+    s = u.b[0]; u.b[0] = u.b[1]; u.b[1] = s;
+#endif
+
+
     if(write_char(u.b[0], out) == EOF) exit(1);
     if(write_char(u.b[1], out) == EOF) exit(1);
 
@@ -500,6 +506,13 @@ static void write_32(unsigned int value)
         unsigned char b[4];
     } u;
     u.i = value;
+
+#ifndef __LITTLE_ENDIAN__
+    unsigned char s;
+    s = u.b[0]; u.b[0] = u.b[3]; u.b[3] = s;
+    s = u.b[1]; u.b[1] = u.b[2]; u.b[2] = s;
+#endif
+
 
     if(write_char(u.b[0], out) == EOF) exit(1);
     if(write_char(u.b[1], out) == EOF) exit(1);
@@ -521,6 +534,12 @@ static void write_float(float value)
         unsigned char b[4];
     } u;
     u.f = value;
+
+#ifndef __LITTLE_ENDIAN__
+    unsigned char s;
+    s = u.b[0]; u.b[0] = u.b[3]; u.b[3] = s;
+    s = u.b[1]; u.b[1] = u.b[2]; u.b[2] = s;
+#endif
 
     if(write_char(u.b[0], out) == EOF) exit(1);
     if(write_char(u.b[1], out) == EOF) exit(1);
