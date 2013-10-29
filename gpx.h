@@ -29,6 +29,10 @@
 
 #include <limits.h>
 
+#ifdef __cplusplus
+	extern "C" {
+#endif
+
 #define GPX_VERSION "1.3"
 
 /* Nonzero to 'simulate' RPM using 5D, zero to disable */
@@ -90,7 +94,7 @@ typedef struct tPoint5d {
     double y;
     double z;
     double a;
-    double b;   
+    double b;
 } Point5d, *Ptr5d;
 
 typedef struct tCommand {
@@ -100,22 +104,22 @@ typedef struct tCommand {
     double z;
     double a;
     double b;
-    
+
     double e;
     double f;
 
     double p;
     double r;
     double s;
-    
+
     // commands
     unsigned g;
     unsigned m;
     unsigned t;
-    
+
     // comments
     char *comment;
-    
+
     // state
     int flag;
 } Command, *PtrCommand;
@@ -199,5 +203,9 @@ typedef struct tCommandAt {
 #define COMMAND_AT_MAX 128
 
 #define BUFFER_MAX 1024
+
+#ifdef __cplusplus
+	} //extern "C"
+#endif
 
 #endif
