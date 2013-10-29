@@ -31,6 +31,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <strings.h>
 
 #ifdef _WIN32
@@ -303,7 +304,7 @@ static int add_byte_to_buffer(unsigned char d, unsigned char **buf, long *len, l
 
 //NOTE: mimics fgets, but with a memory buffer instead.
 static char *bufgets(char *str, int size, const char *input, long input_len, long *pos) {
-	int rlen, nl = 0;
+	int rlen, nl = 0, nl_found = 0;
 
 	//update to the position we're actually working at
 	input += *pos;
@@ -314,12 +315,16 @@ static char *bufgets(char *str, int size, const char *input, long input_len, lon
 
 	//reduce rlen to position of newline if found
 	while(input[nl] != '\n' && nl < rlen) nl++;
-	if (nl < rlen || input[nl - 1] == '\n') rlen = nl;
+	if (nl < rlen || input[nl - 1] == '\n') {
+		rlen = nl;
+		nl_found = 1;
+	}
 
 	//copy what there is to offer
 	memcpy(str, input, rlen);
 	str[rlen] = '\0';
-	*pos += rlen + 1;
+	*pos += rlen;
+	if (nl_found) *pos += 1;
 
 	//return NULL if there was nothing to read
 	return rlen > 0 ? str : NULL;
