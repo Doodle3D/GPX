@@ -41,6 +41,7 @@
 #endif
 
 #include "gpx.h"
+#include "libgpx.h"
 #include "ini.h"
 
 #define A 0
@@ -2349,6 +2350,18 @@ void gpx_setSuppressEpilogue(int suppress) {
 	suppressEpilogue = suppress;
 }
 
+void gpx_setBuildName(const char *name) {
+	if (name == NULL) return;
+
+	if (state.buildname == NULL) {
+		free(state.buildname);
+		state.buildname = NULL;
+	}
+
+	state.buildname = (char*)malloc(strlen(name) + 1);
+	strcpy(state.buildname, name);
+}
+
 void gpx_clear_state() {
   initialize_globals();
   state.filesize = 0;
@@ -2357,7 +2370,7 @@ void gpx_clear_state() {
   state.command_emitted = 0;
   state.do_pause_at_zpos = 0;
   state.filament_diameter = 0;
-  if (state.buildname == NULL) state.buildname = "GPX " GPX_VERSION;
+  if (state.buildname == NULL) gpx_setBuildName("GPX " GPX_VERSION);
   state.overflow = 0;
   state.outbuf = NULL;
   state.outbuf_len = 0;

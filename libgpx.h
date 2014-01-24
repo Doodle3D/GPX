@@ -5,6 +5,7 @@
 #endif
 
 void gpx_setSuppressEpilogue(int suppress);
+void gpx_setBuildName(const char *name);
 void gpx_clear_state();
 void gpx_convert(const char *input, long input_len, unsigned char **output, long *output_len);
 
