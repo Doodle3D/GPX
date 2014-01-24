@@ -244,7 +244,7 @@ int programState;           // gcode program state used to trigger start and end
 int reprapFlavor;           // reprap gcode flavor
 int dittoPrinting;          // enable ditto printing
 int buildProgress;          // override build percent
-int suppressEpilogue;				// do not emit build finished commands
+int suppressEpilogue = 0;   // do not emit build finished commands
 int verboseMode;
 unsigned lineNumber;        // the current line number in the gcode file
 static char buffer[BUFFER_MAX + 1];    // the statically allocated parse-in-place buffer
@@ -300,6 +300,23 @@ static int add_byte_to_buffer(unsigned char d, unsigned char **buf, long *len, l
 	(*buf)[*len] = d;
 	(*len)++;
 	return 1;
+}
+
+static int add_bytes_to_buffer(unsigned char *s, size_t slen, unsigned char **buf, long *buflen, long *capacity) {
+	static const int BUF_REALLOC_SIZE = 100;
+
+	size_t reqlen = *buflen + slen;
+	if (reqlen >= *capacity) {
+		if (*buflen + BUF_REALLOC_SIZE > reqlen) reqlen = *buflen + BUF_REALLOC_SIZE;
+		unsigned char *np = (unsigned char*)realloc(*buf, *buflen + reqlen);
+		if (!np) return 0;
+		*buf = np;
+		*capacity += reqlen;
+	}
+
+	memcpy(*buf + *buflen, s, slen);
+	(*buflen) += slen;
+	return slen;
 }
 
 //NOTE: mimics fgets, but with a memory buffer instead.
@@ -436,7 +453,6 @@ static void initialize_globals(void)
 
     reprapFlavor = 1; // default is reprap flavor
     dittoPrinting = 0;
-    suppressEpilogue = 0;
     buildProgress = 0;
     verboseMode = 0;
 
@@ -556,7 +572,14 @@ static void write_float(float value)
 
 static size_t write_string(char *string, long length)
 {
-    size_t bytes_sent = fwrite(string, 1, length, out);
+	size_t bytes_sent = 0;
+
+	if (state.outbuf != NULL) {
+		int rv = add_bytes_to_buffer(string, length, state.outbuf, state.outbuf_len, &state.outbuf_capacity);
+		bytes_sent = (rv == length) ? rv : EOF;
+	} else {
+	    bytes_sent = fwrite(string, 1, length, out);
+	}
     if(write_char('\0', out) == EOF) exit(1);
 
     if(out2) {
@@ -2846,14 +2869,12 @@ void gpx_convert(const char *input, long input_len, unsigned char **output, long
           switch(command.m) {
                   // M2 - End program
               case 2:
-              		if (!suppressEpilogue) {
 										if(program_is_running()) {
 												end_program();
 												set_build_progress(100);
 												end_build();
 												set_steppers(AXES_BIT_MASK, 0);
 										}
-              		}
                   exit(0);
 
                   // M6 - Tool change AND wait for extruder AND build platfrom to reach (or exceed) temperature
@@ -2863,6 +2884,7 @@ void gpx_convert(const char *input, long input_len, unsigned char **output, long
                       do_tool_change(timeout);
                       state.command_emitted++;
                   }
+                  // fall through to M116
 
                   // M116 - Wait for extruder AND build platfrom to reach (or exceed) temperature
               case 116: {
