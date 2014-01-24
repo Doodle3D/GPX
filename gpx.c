@@ -287,22 +287,7 @@ struct state_s {
 struct state_s state = { 0, 0, 0, 0, 0, 0.0, NULL, 0, NULL, 0, 0 };
 
 
-//NOTE: write byte d to buffer `buf` and make sure enough space is available. Reallocates in blocks to avoid +1 reallocations.
-static int add_byte_to_buffer(unsigned char d, unsigned char **buf, long *len, long *capacity) {
-	static const int BUF_REALLOC_SIZE = 100;
-
-	if (*len >= *capacity) {
-		unsigned char *np = (unsigned char*)realloc(*buf, *len + BUF_REALLOC_SIZE);
-		if (!np) return 0;
-		*buf = np;
-		*capacity += BUF_REALLOC_SIZE;
-	}
-
-	(*buf)[*len] = d;
-	(*len)++;
-	return 1;
-}
-
+//NOTE: write s of length slen to buffer `buf` and make sure enough space is available. Reallocates in blocks to avoid +1 reallocations.
 static int add_bytes_to_buffer(unsigned char *s, size_t slen, unsigned char **buf, long *buflen, long *capacity) {
 	static const int BUF_REALLOC_SIZE = 100;
 
@@ -318,6 +303,10 @@ static int add_bytes_to_buffer(unsigned char *s, size_t slen, unsigned char **bu
 	memcpy(*buf + *buflen, s, slen);
 	(*buflen) += slen;
 	return slen;
+}
+
+static int add_byte_to_buffer(unsigned char d, unsigned char **buf, long *buflen, long *capacity) {
+	return add_bytes_to_buffer(&d, 1, buf, buflen, capacity);
 }
 
 //NOTE: mimics fgets, but with a memory buffer instead.
@@ -386,7 +375,7 @@ static void initialize_globals(void)
     // we default to using pipes
     in = stdin;
     out = stdout;
-    out2 = NULL;
+    out2 = NULL; //NOTE: in 'library' mode this must always be NULL
     sdCardPath = NULL;
 
     // register cleanup function
