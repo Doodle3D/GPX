@@ -3027,9 +3027,9 @@ void gpx_convert(const char *input, long input_len, unsigned char **output, long
                           if(percent == 100) {
                               // disable macros in footer
                               macrosEnabled = 0;
-                              end_program();
+                              //end_program();
                               set_build_progress(100);
-                              end_build();
+                              //end_build();
                           }
                           else {
                               // enable macros in object body
@@ -3517,7 +3517,7 @@ void gpx_convert(const char *input, long input_len, unsigned char **output, long
 				set_build_progress(100);
 				end_build();
 		}
-		set_steppers(AXES_BIT_MASK, 0);
+		//set_steppers(AXES_BIT_MASK, 0);
   }
 }
 
