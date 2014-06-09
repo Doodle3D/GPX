@@ -565,7 +565,7 @@ static size_t write_string(char *string, long length)
 	size_t bytes_sent = 0;
 
 	if (state.outbuf != NULL) {
-		int rv = add_bytes_to_buffer(string, length, state.outbuf, state.outbuf_len, &state.outbuf_capacity);
+		int rv = add_bytes_to_buffer((unsigned char *)string, length, state.outbuf, state.outbuf_len, &state.outbuf_capacity);
 		bytes_sent = (rv == length) ? rv : EOF;
 	} else {
 	    bytes_sent = fwrite(string, 1, length, out);
